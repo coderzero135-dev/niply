@@ -21,6 +21,7 @@ def main():
         "--name", "Niply",
         "--noconsole",
         "--icon", "icon.ico",
+        "--version-file", "version_info.txt",
     ])
 
     # Copy config.json and icon.ico next to the .exe

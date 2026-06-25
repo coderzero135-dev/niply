@@ -84,6 +84,19 @@ Example config:
 }
 ```
 
+## Antivirus Notice
+
+Some antivirus software may flag `Niply.exe` as suspicious because it uses **global keyboard/mouse hooks** to detect your hotkeys from anywhere (e.g., triple-click, side mouse button, F-keys). This is the same low-level access used by keyloggers, but Niply only uses it to trigger your saved messages.
+
+**Why you can trust it:**
+- Niply is **open source** — you can inspect every line of code in this repository
+- It does not record, store, or transmit your keystrokes
+- It only types the messages you configure
+
+If your antivirus blocks Niply, you can either:
+1. Add an exclusion for `Niply.exe` in your antivirus settings
+2. Run Niply directly from Python source (`python discord_quick_reply_gui.py`)
+
 ## Disclaimer
 
 This tool uses your mouse and keyboard to type messages. Only use it in servers/channels where you have permission to send automated messages. The developers are not responsible for any misuse or Discord account actions.
