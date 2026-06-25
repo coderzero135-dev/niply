@@ -28,9 +28,11 @@ import winsound
 import copy
 import traceback
 import logging
+import faulthandler
 
 
 # ==================== LOGGING ====================
+# Note: faulthandler will be enabled after log file is open
 def get_log_path():
     """Get path for crash/debug log."""
     if getattr(sys, 'frozen', False):
@@ -40,14 +42,39 @@ def get_log_path():
     return os.path.join(base_dir, "niply_debug.log")
 
 
-logging.basicConfig(
-    filename=get_log_path(),
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    filemode='w'
-)
+log_handler = logging.FileHandler(get_log_path(), mode='w')
+log_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(log_handler)
+logger.propagate = False
+
+# Enable fault handler to dump tracebacks on segfaults to the log file
+try:
+    faulthandler.enable(file=log_handler.stream)
+except Exception:
+    faulthandler.enable()
+
+
+def flush_log():
+    """Force flush log to disk."""
+    try:
+        log_handler.flush()
+    except Exception:
+        pass
+
+
+def log_exception(exc_type, exc_value, exc_traceback):
+    """Log uncaught exceptions."""
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    flush_log()
+    # Call default handler
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+
+sys.excepthook = log_exception
 logger.info("Niply starting...")
+flush_log()
 
 
 # ==================== CONFIG ====================
@@ -754,7 +781,7 @@ class QuickReplyApp(ctk.CTk):
 
     # ==================== LISTENERS ====================
     def start_persistent_listeners(self):
-        """Start global listeners."""
+        """Start global listeners and heartbeat."""
         pyautogui.FAILSAFE = True
 
         self.mouse_listener = mouse.Listener(on_click=self.on_mouse_click)
@@ -766,10 +793,25 @@ class QuickReplyApp(ctk.CTk):
         )
         self.keyboard_listener.start()
 
+        self.heartbeat_running = True
+        self.heartbeat_thread = threading.Thread(target=self._heartbeat, daemon=True)
+        self.heartbeat_thread.start()
+
         self.log("Listeners active. Arm to enable presets.")
 
+    def _heartbeat(self):
+        """Log heartbeat every 30 seconds to track crashes."""
+        while self.heartbeat_running:
+            try:
+                logger.debug("Heartbeat - app is alive")
+                flush_log()
+            except Exception:
+                pass
+            time.sleep(30)
+
     def stop_persistent_listeners(self):
-        """Stop global listeners."""
+        """Stop global listeners and heartbeat."""
+        self.heartbeat_running = False
         if self.mouse_listener:
             self.mouse_listener.stop()
             self.mouse_listener = None
