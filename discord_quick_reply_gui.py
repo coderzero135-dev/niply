@@ -933,6 +933,8 @@ class QuickReplyApp(ctk.CTk):
         """Close the app."""
         self.exiting = True
         self.sending_enabled = False
+        # Auto-save presets and settings on close so nothing is lost
+        self.save_settings(silent=True)
         self.stop_persistent_listeners()
         self.destroy()
 
