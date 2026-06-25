@@ -1036,9 +1036,15 @@ class QuickReplyApp(ctk.CTk):
         time.sleep(self.config_data.get("typing_delay", 0.3))
 
         if send_mode == "block":
-            # Send all lines at once as one message with line breaks
-            block_text = "\n".join(messages)
-            pyautogui.typewrite(block_text, interval=0.01)
+            # Send all lines as one message using Shift+Enter for newlines
+            for i, msg in enumerate(messages):
+                if i > 0:
+                    # Shift+Enter to add a new line without sending
+                    pyautogui.keyDown('shift')
+                    pyautogui.keyDown('return')
+                    pyautogui.keyUp('return')
+                    pyautogui.keyUp('shift')
+                pyautogui.typewrite(msg, interval=0.01)
             pyautogui.press("enter")
             self.log(f"Sent block: {preset_name}")
         else:
