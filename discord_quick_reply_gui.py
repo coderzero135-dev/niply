@@ -56,7 +56,8 @@ def load_config():
                     ],
                     "trigger_type": "triple_click",
                     "trigger_value": "left",
-                    "modifier": "none"
+                    "modifier": "none",
+                    "send_mode": "line_by_line"
                 }
             ],
             "delay_between_messages": 0.8,
@@ -76,8 +77,14 @@ def load_config():
             "messages": config.get("messages", ["hello"]),
             "trigger_type": config.get("trigger_type", "triple_click"),
             "trigger_value": config.get("trigger_value", "left"),
-            "modifier": config.get("modifier", "none")
+            "modifier": config.get("modifier", "none"),
+            "send_mode": "line_by_line"
         }]
+
+    # Ensure all presets have send_mode
+    for preset in config.get("presets", []):
+        if "send_mode" not in preset:
+            preset["send_mode"] = "line_by_line"
 
     if "global_arm_hotkey" not in config:
         config["global_arm_hotkey"] = {
@@ -246,6 +253,24 @@ class PresetWidget(ctk.CTkFrame):
         )
         self.modifier_menu.grid(row=0, column=2, padx=2, pady=2)
 
+        # Send mode
+        self.send_mode_label = ctk.CTkLabel(
+            self,
+            text="Send Mode:",
+            font=ctk.CTkFont(size=11)
+        )
+        self.send_mode_label.pack(anchor="w", padx=10, pady=(5, 0))
+
+        self.send_mode_var = ctk.StringVar(value="line_by_line")
+        self.send_mode_menu = ctk.CTkOptionMenu(
+            self,
+            values=["line_by_line", "block"],
+            variable=self.send_mode_var,
+            command=lambda x: self._notify_change(),
+            width=180
+        )
+        self.send_mode_menu.pack(anchor="w", padx=10, pady=2)
+
         # Delete button
         self.delete_button = ctk.CTkButton(
             self,
@@ -289,6 +314,9 @@ class PresetWidget(ctk.CTkFrame):
         modifier = preset.get("modifier", "none")
         self.modifier_var.set(modifier)
 
+        send_mode = preset.get("send_mode", "line_by_line")
+        self.send_mode_var.set(send_mode)
+
     def get_preset(self):
         """Get preset data from UI."""
         return {
@@ -296,7 +324,8 @@ class PresetWidget(ctk.CTkFrame):
             "messages": [line.strip() for line in self.messages_text.get("1.0", "end").split("\n") if line.strip()],
             "trigger_type": self.type_var.get(),
             "trigger_value": self.value_var.get(),
-            "modifier": self.modifier_var.get()
+            "modifier": self.modifier_var.get(),
+            "send_mode": self.send_mode_var.get()
         }
 
     def delete_self(self):
@@ -875,17 +904,26 @@ class QuickReplyApp(ctk.CTk):
 
         self.last_trigger_time[preset_name] = current_time
         messages = preset.get("messages", [])
+        send_mode = preset.get("send_mode", "line_by_line")
 
-        self.log(f"Sending '{preset_name}' ({len(messages)} messages)...")
+        self.log(f"Sending '{preset_name}' ({len(messages)} lines, {send_mode})...")
 
         time.sleep(self.config_data.get("typing_delay", 0.3))
 
-        for i, msg in enumerate(messages):
-            pyautogui.typewrite(msg, interval=0.01)
+        if send_mode == "block":
+            # Send all lines at once as one message with line breaks
+            block_text = "\n".join(messages)
+            pyautogui.typewrite(block_text, interval=0.01)
             pyautogui.press("enter")
-            self.log(f"Sent ({i + 1}/{len(messages)}): {msg}")
-            if i < len(messages) - 1:
-                time.sleep(self.config_data.get("delay_between_messages", 0.8))
+            self.log(f"Sent block: {preset_name}")
+        else:
+            # Send line by line
+            for i, msg in enumerate(messages):
+                pyautogui.typewrite(msg, interval=0.01)
+                pyautogui.press("enter")
+                self.log(f"Sent ({i + 1}/{len(messages)}): {msg}")
+                if i < len(messages) - 1:
+                    time.sleep(self.config_data.get("delay_between_messages", 0.8))
 
         self.log(f"'{preset_name}' done!")
         threading.Thread(target=play_sound, args=("send",), daemon=True).start()
