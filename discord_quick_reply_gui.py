@@ -26,6 +26,28 @@ import time
 import threading
 import winsound
 import copy
+import traceback
+import logging
+
+
+# ==================== LOGGING ====================
+def get_log_path():
+    """Get path for crash/debug log."""
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "niply_debug.log")
+
+
+logging.basicConfig(
+    filename=get_log_path(),
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    filemode='w'
+)
+logger = logging.getLogger(__name__)
+logger.info("Niply starting...")
 
 
 # ==================== CONFIG ====================
@@ -680,21 +702,55 @@ class QuickReplyApp(ctk.CTk):
             return False
 
     def log(self, message):
-        """Add a message to the log area."""
-        self.log_area.configure(state="normal")
-        self.log_area.insert("end", f"[{time.strftime('%H:%M:%S')}] {message}\n")
-        self.log_area.see("end")
-        self.log_area.configure(state="disabled")
+        """Add a message to the log area (thread-safe)."""
+        timestamp = time.strftime('%H:%M:%S')
+        text = f"[{timestamp}] {message}\n"
+
+        def update():
+            try:
+                self.log_area.configure(state="normal")
+                self.log_area.insert("end", text)
+                self.log_area.see("end")
+                self.log_area.configure(state="disabled")
+            except Exception as e:
+                logger.exception("Error updating log area")
+
+        # Schedule on main thread if called from another thread
+        if threading.current_thread() is threading.main_thread():
+            update()
+        else:
+            try:
+                self.after(0, update)
+            except Exception:
+                logger.exception("Failed to schedule log update")
 
     def mark_unsaved(self):
-        """Show unsaved changes indicator."""
-        if hasattr(self, "save_status_label"):
-            self.save_status_label.configure(text="Unsaved changes", text_color="orange")
+        """Show unsaved changes indicator (thread-safe)."""
+        def update():
+            if hasattr(self, "save_status_label"):
+                self.save_status_label.configure(text="Unsaved changes", text_color="orange")
+
+        if threading.current_thread() is threading.main_thread():
+            update()
+        else:
+            try:
+                self.after(0, update)
+            except Exception:
+                pass
 
     def mark_saved(self):
-        """Show saved indicator."""
-        if hasattr(self, "save_status_label"):
-            self.save_status_label.configure(text="Saved", text_color="green")
+        """Show saved indicator (thread-safe)."""
+        def update():
+            if hasattr(self, "save_status_label"):
+                self.save_status_label.configure(text="Saved", text_color="green")
+
+        if threading.current_thread() is threading.main_thread():
+            update()
+        else:
+            try:
+                self.after(0, update)
+            except Exception:
+                pass
 
     # ==================== LISTENERS ====================
     def start_persistent_listeners(self):
@@ -793,67 +849,85 @@ class QuickReplyApp(ctk.CTk):
         self.left_click_times.append(now)
         return len(self.left_click_times) >= 3
 
+    def safe_send(self, preset):
+        """Run send_messages in a background thread so listener callbacks return fast."""
+        def run():
+            try:
+                self.send_messages(preset)
+            except Exception as e:
+                logger.exception(f"Error sending preset {preset.get('name')}")
+                self.log(f"Error sending: {e}")
+        threading.Thread(target=run, daemon=True).start()
+
     def on_mouse_click(self, x, y, button, pressed):
-        """Handle mouse clicks."""
-        if not pressed or self.exiting:
-            return
+        """Handle mouse clicks. Must return quickly to keep Windows hook alive."""
+        try:
+            if not pressed or self.exiting:
+                return
 
-        # Arm/disarm hotkey
-        if self.is_arm_hotkey(button, is_mouse=True):
-            now = time.time()
-            if now - self.last_arm_hotkey_time >= self.arm_hotkey_cooldown:
-                self.last_arm_hotkey_time = now
-                self.toggle_arm()
-            return
+            # Arm/disarm hotkey
+            if self.is_arm_hotkey(button, is_mouse=True):
+                now = time.time()
+                if now - self.last_arm_hotkey_time >= self.arm_hotkey_cooldown:
+                    self.last_arm_hotkey_time = now
+                    self.toggle_arm()
+                return
 
-        if not self.sending_enabled:
-            return
+            if not self.sending_enabled:
+                return
 
-        # Triple-click detection (only for left button)
-        if button == mouse.Button.left:
-            if self.detect_triple_click():
-                self.left_click_times.clear()
-                preset = self.find_triple_click_preset()
-                if preset:
-                    self.send_messages(preset)
-            # Single left click does nothing - don't fall through
-            return
+            # Triple-click detection (only for left button)
+            if button == mouse.Button.left:
+                if self.detect_triple_click():
+                    self.left_click_times.clear()
+                    preset = self.find_triple_click_preset()
+                    if preset:
+                        self.safe_send(preset)
+                return
 
-        # Other mouse triggers (side buttons, right, middle)
-        preset = self.find_matching_preset(button, is_mouse=True)
-        if preset:
-            self.send_messages(preset)
+            # Other mouse triggers (side buttons, right, middle)
+            preset = self.find_matching_preset(button, is_mouse=True)
+            if preset:
+                self.safe_send(preset)
+        except Exception as e:
+            logger.exception("Error in on_mouse_click")
 
     def on_key_press(self, key):
-        """Handle keyboard presses."""
-        if self.exiting:
-            return
+        """Handle keyboard presses. Must return quickly to keep Windows hook alive."""
+        try:
+            if self.exiting:
+                return
 
-        self.held_keys.add(key)
+            self.held_keys.add(key)
 
-        if key == keyboard.Key.esc:
-            self.log("ESC pressed. Closing...")
-            self.close_app()
-            return False
+            if key == keyboard.Key.esc:
+                self.log("ESC pressed. Closing...")
+                self.close_app()
+                return False
 
-        # Arm/disarm hotkey
-        if self.is_arm_hotkey(key, is_mouse=False):
-            now = time.time()
-            if now - self.last_arm_hotkey_time >= self.arm_hotkey_cooldown:
-                self.last_arm_hotkey_time = now
-                self.toggle_arm()
-            return
+            # Arm/disarm hotkey
+            if self.is_arm_hotkey(key, is_mouse=False):
+                now = time.time()
+                if now - self.last_arm_hotkey_time >= self.arm_hotkey_cooldown:
+                    self.last_arm_hotkey_time = now
+                    self.toggle_arm()
+                return
 
-        if not self.sending_enabled:
-            return
+            if not self.sending_enabled:
+                return
 
-        preset = self.find_matching_preset(key, is_mouse=False)
-        if preset:
-            self.send_messages(preset)
+            preset = self.find_matching_preset(key, is_mouse=False)
+            if preset:
+                self.safe_send(preset)
+        except Exception as e:
+            logger.exception("Error in on_key_press")
 
     def on_key_release(self, key):
         """Handle keyboard releases."""
-        self.held_keys.discard(key)
+        try:
+            self.held_keys.discard(key)
+        except Exception:
+            logger.exception("Error in on_key_release")
 
     # ==================== ARM/DISARM ====================
     def arm_tool(self):
@@ -880,15 +954,24 @@ class QuickReplyApp(ctk.CTk):
             self.arm_tool()
 
     def update_status(self):
-        """Update status UI."""
-        if self.sending_enabled:
-            self.status_label.configure(text="Status: ARMED", text_color="green")
-            self.arm_button.configure(state="disabled")
-            self.disarm_button.configure(state="normal")
+        """Update status UI (thread-safe)."""
+        def update():
+            if self.sending_enabled:
+                self.status_label.configure(text="Status: ARMED", text_color="green")
+                self.arm_button.configure(state="disabled")
+                self.disarm_button.configure(state="normal")
+            else:
+                self.status_label.configure(text="Status: Disarmed", text_color="red")
+                self.arm_button.configure(state="normal")
+                self.disarm_button.configure(state="disabled")
+
+        if threading.current_thread() is threading.main_thread():
+            update()
         else:
-            self.status_label.configure(text="Status: Disarmed", text_color="red")
-            self.arm_button.configure(state="normal")
-            self.disarm_button.configure(state="disabled")
+            try:
+                self.after(0, update)
+            except Exception:
+                pass
 
     # ==================== SEND MESSAGES ====================
     def send_messages(self, preset):
@@ -944,10 +1027,18 @@ class QuickReplyApp(ctk.CTk):
 
 
 def main():
-    app = QuickReplyApp()
-    app.protocol("WM_DELETE_WINDOW", app.on_closing)
-    app.mainloop()
+    try:
+        app = QuickReplyApp()
+        app.protocol("WM_DELETE_WINDOW", app.on_closing)
+        app.mainloop()
+    except Exception as e:
+        logger.exception("Fatal error in main loop")
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.exception("Application crashed")
+        raise
